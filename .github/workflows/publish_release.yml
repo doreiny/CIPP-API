@@ -10,17 +10,15 @@ permissions:
 
 jobs:
   release:
-    name: Generate Release Notes and Upload to Azure
+    name: Generate and Upload Release to Azure
     runs-on: ubuntu-latest
 
     steps:
-      # Checkout the repository (with full history)
       - name: Checkout Code
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
 
-      # Read and Trim Version
       - name: Read and Trim Version
         id: get_version
         run: |
@@ -35,7 +33,6 @@ jobs:
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-      # Exit if Tag Already Exists
       - name: Check if Tag Exists
         id: tag_check
         run: |
@@ -47,15 +44,6 @@ jobs:
             echo "tag_exists=false" >> $GITHUB_ENV
           fi
 
-      # Generate Release Notes
-      - name: Generate Release Notes
-        id: changelog
-        if: env.tag_exists == 'false'
-        uses: mikepenz/release-changelog-builder-action@v5.0.0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # Create a new release tag
       - name: Create GitHub Release
         if: env.tag_exists == 'false'
         uses: ncipollo/release-action@v1.14.0
@@ -65,11 +53,10 @@ jobs:
           draft: false
           prerelease: false
           makeLatest: true
-          body: ${{ steps.changelog.outputs.changelog }}
+          body: "Auto-release by workflow"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # Create ZIP File in a New Source Directory
       - name: Prepare and Zip Release Files
         if: env.tag_exists == 'false'
         run: |
@@ -83,8 +70,7 @@ jobs:
             --exclude ".*" \
             --exclude ".*/**"
 
-      # Upload to Azure Blob Storage
-      - name: Azure Blob Upload with Destination folder defined
+      - name: Azure Blob Upload
         if: env.tag_exists == 'false'
         uses: LanceMcCarthy/Action-AzureBlobUpload@v3.3.0
         with:
