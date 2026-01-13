@@ -5,17 +5,26 @@ on:
     branches:
       - master
   workflow_dispatch:
+  workflow_run:
+    workflows:
+      - "Sync upstream CIPP-API (keep local workflows)"
+    types:
+      - completed
+
+env:
+  AZURE_FUNCTIONAPP_PACKAGE_PATH: "."
+  AZURE_FUNCTIONAPP_NAME: "cipps5nma"
+  AZURE_RESOURCE_GROUP: "CIPP"
 
 concurrency:
   group: deploy-cipps5nma
   cancel-in-progress: true
 
-env:
-  AZURE_FUNCTIONAPP_NAME: cipps5nma
-  AZURE_FUNCTIONAPP_PACKAGE_PATH: "."
-
 jobs:
   deploy:
+    # אם זה הגיע מ-workflow_run, נרוץ רק אם ה-sync הצליח
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+
     runs-on: windows-latest
     permissions:
       id-token: write
@@ -24,6 +33,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Show commit being deployed
+        run: |
+          git rev-parse HEAD
+          git log -1 --oneline
 
       - name: Login to Azure (OIDC)
         uses: azure/login@v2
@@ -36,5 +50,9 @@ jobs:
         uses: Azure/functions-action@v1
         with:
           app-name: ${{ env.AZURE_FUNCTIONAPP_NAME }}
-          slot-name: Production
+          slot-name: "Production"
           package: ${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}
+
+      - name: Restart Function App (force fresh code load)
+        run: |
+          az functionapp restart --name "${{ env.AZURE_FUNCTIONAPP_NAME }}" --resource-group "${{ env.AZURE_RESOURCE_GROUP }}"
