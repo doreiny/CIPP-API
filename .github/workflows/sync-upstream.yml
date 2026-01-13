@@ -1,4 +1,4 @@
-name: Sync upstream CIPP-API
+name: Sync upstream CIPP-API (code only, keep workflows)
 
 on:
   schedule:
@@ -19,50 +19,36 @@ jobs:
           fetch-depth: 0
 
       - name: Add upstream and fetch
+        shell: bash
         run: |
+          set -euo pipefail
           git remote add upstream https://github.com/KelvinTegelaar/CIPP-API.git || true
           git fetch upstream
 
-      - name: Merge upstream/master into master (do not touch workflows)
+      - name: Sync from upstream/master (exclude .github/workflows)
+        shell: bash
         run: |
-          set -e
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          set -euo pipefail
 
-          git checkout master
+          # 1) עדכן את כל הקוד מה-upstream, אבל אל תיגע ב-.github/workflows
+          git restore --source=upstream/master --staged --worktree -- . ':(exclude).github/workflows'
 
-          # שמור snapshot של ה-workflows שלך (כדי לא לגעת בהם)
-          mkdir -p /tmp/keep_workflows
-          cp -a .github/workflows /tmp/keep_workflows/ 2>/dev/null || true
+          # 2) מחק קבצים שנמחקו ב-upstream (גם פה לא נוגעים ב-workflows)
+          comm -23 \
+            <(git ls-tree -r --name-only HEAD | sort) \
+            <(git ls-tree -r --name-only upstream/master | sort) \
+            | grep -v '^\.github/workflows/' \
+            | xargs -r git rm -f
 
-          # נסה merge
-          if git merge --no-edit upstream/master; then
-            echo "Merge succeeded."
+          # 3) Commit רק אם יש שינוי
+          if git status --porcelain | grep -q .; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add -A
+            git commit -m "Sync upstream (exclude workflows)"
           else
-            echo "Merge conflict detected. Aborting merge and retrying with workflows preserved..."
-            git merge --abort
-
-            # merge רגיל שוב כדי שנוכל לפתור רק מה שצריך
-            git merge --no-edit upstream/master || true
+            echo "No changes to sync."
           fi
-
-          # החזר את ה-workflows לגרסה שלך (לא דוחפים שינויים ל-workflows בכלל)
-          if [ -d /tmp/keep_workflows/workflows ]; then
-            rm -rf .github/workflows
-            mkdir -p .github
-            cp -a /tmp/keep_workflows/workflows .github/workflows
-            git add .github/workflows
-          fi
-
-          # אם נשארו קונפליקטים — נכשל (עדיף לעצור מאשר להרוס)
-          if git diff --name-only --diff-filter=U | grep -q .; then
-            echo "Conflicts remain. Failing."
-            git diff --name-only --diff-filter=U
-            exit 1
-          fi
-
-          # Commit רק אם יש שינויים
-          git diff --cached --quiet || git commit -m "Sync upstream (preserve workflows)"
 
       - name: Push to fork
         run: |
