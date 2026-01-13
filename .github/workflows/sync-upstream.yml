@@ -1,15 +1,15 @@
 name: Sync upstream CIPP-API (keep local workflows)
 
 on:
-  schedule:
-    - cron: "0 3 * * *"   # פעם ביום UTC
   workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * *" # פעם ביום (UTC)
 
 permissions:
   contents: write
 
 concurrency:
-  group: sync-upstream
+  group: sync-upstream-cipp-api
   cancel-in-progress: true
 
 jobs:
@@ -26,59 +26,71 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Backup local workflows (we must not touch them)
+      - name: Backup local workflows (we will keep ours)
         run: |
-          mkdir -p /tmp/workflows
+          mkdir -p /tmp/local-workflows
           if [ -d ".github/workflows" ]; then
-            rsync -a ".github/workflows/" /tmp/workflows/
+            rsync -a ".github/workflows/" "/tmp/local-workflows/"
           fi
 
-      - name: Add upstream & fetch (NO TAGS)
+      - name: Add upstream & fetch
         run: |
           git remote add upstream https://github.com/KelvinTegelaar/CIPP-API.git 2>/dev/null || true
-          git fetch upstream master --prune --no-tags
+          git fetch upstream master --prune
 
-      - name: Merge upstream/master (prefer upstream), then restore local workflows
-        shell: bash
+      - name: Merge upstream/master into master (prefer upstream, but keep local workflows)
         run: |
           set -euo pipefail
+          git checkout master
 
-          # נסה למזג בלי קומיט כדי שנוכל להחזיר workflows לפני שמסיימים
-          if git merge upstream/master --no-commit -X theirs; then
-            echo "Merge staged (no-commit)."
-          else
-            echo "Merge had conflicts. We'll restore workflows and fail only if other conflicts remain."
-          fi
+          # מתחילים merge בלי commit אוטומטי כדי שנוכל להגן על workflows
+          git merge --no-commit --no-ff -X theirs upstream/master || true
 
-          # להחזיר workflows המקומיים בדיוק כמו שהיו
-          if [ -d "/tmp/workflows" ] && [ "$(ls -A /tmp/workflows 2>/dev/null)" ]; then
-            rm -rf .github/workflows
-            mkdir -p .github/workflows
-            rsync -a /tmp/workflows/ .github/workflows/
-          fi
+          # אם יש קונפליקטים:
+          # - על .github/workflows ניקח "ours" (הגרסה המקומית שלך)
+          # - על כל השאר ניקח "theirs" (ה-upstream)
+          CONFLICTS=$(git diff --name-only --diff-filter=U || true)
+          if [ -n "${CONFLICTS}" ]; then
+            echo "Conflicts detected:"
+            echo "${CONFLICTS}"
 
-          # אם עדיין יש קונפליקטים (מחוץ ל-workflows) – עוצרים
-          if git ls-files -u | grep -q .; then
-            echo "Conflicts remain after restoring workflows. Manual resolution needed."
-            git status
-            exit 1
-          fi
+            WF_CONFLICTS=$(echo "${CONFLICTS}" | grep -E '^\.github/workflows/' || true)
+            OTHER_CONFLICTS=$(echo "${CONFLICTS}" | grep -vE '^\.github/workflows/' || true)
 
-          git add -A
+            if [ -n "${WF_CONFLICTS}" ]; then
+              echo "Resolving workflow conflicts by keeping LOCAL (ours):"
+              echo "${WF_CONFLICTS}"
+              echo "${WF_CONFLICTS}" | xargs -r git checkout --ours --
+              echo "${WF_CONFLICTS}" | xargs -r git add --
+            fi
 
-          # אם יש merge במצב פתוח (MERGE_HEAD) – נסיים אותו תמיד
-          if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
-            git commit --allow-empty -m "Merge upstream/master into master (keep local workflows)"
-          else
-            # אם אין merge פתוח, ניצור קומיט רק אם יש שינוי אמיתי
-            if ! git diff --cached --quiet; then
-              git commit -m "Sync upstream/master (keep local workflows)"
-            else
-              echo "Already up to date."
-              exit 0
+            if [ -n "${OTHER_CONFLICTS}" ]; then
+              echo "Resolving other conflicts by taking UPSTREAM (theirs):"
+              echo "${OTHER_CONFLICTS}"
+              echo "${OTHER_CONFLICTS}" | xargs -r git checkout --theirs --
+              echo "${OTHER_CONFLICTS}" | xargs -r git add --
             fi
           fi
 
-      - name: Push branch (NO TAGS)
+          # מחזירים את ה-workflows בדיוק כמו שהיו אצלך (כדי שלא ננסה לעדכן workflows של upstream)
+          mkdir -p .github/workflows
+          rsync -a --delete "/tmp/local-workflows/" ".github/workflows/" || true
+
+          # מבטיחים שאין שינויי workflows בסטייג'
+          git reset HEAD -- .github/workflows || true
+          git checkout -- .github/workflows || true
+
+          # מוסיפים את כל השינויים (מלבד workflows שנשארו נקיים)
+          git add -A
+
+          # אם אין מה לקמפליט – יוצאים בלי push
+          if git diff --cached --quiet; then
+            echo "No upstream changes to apply. Exiting."
+            exit 0
+          fi
+
+          git commit -m "Sync upstream master (keep local workflows)"
+
+      - name: Push to fork
         run: |
           git push origin master
