@@ -2,7 +2,7 @@ name: Sync upstream CIPP-API (keep local workflows)
 
 on:
   schedule:
-    - cron: "0 3 * * *"   # פעם ביום (UTC). אפשר לשנות/להוריד אם לא בא לך.
+    - cron: "0 3 * * *"   # פעם ביום UTC
   workflow_dispatch:
 
 permissions:
@@ -33,38 +33,31 @@ jobs:
             rsync -a ".github/workflows/" /tmp/workflows/
           fi
 
-      - name: Add upstream & fetch
+      - name: Add upstream & fetch (NO TAGS)
         run: |
           git remote add upstream https://github.com/KelvinTegelaar/CIPP-API.git 2>/dev/null || true
-          git fetch upstream master --prune --tags
+          git fetch upstream master --prune --no-tags
 
       - name: Merge upstream/master (prefer upstream), then restore local workflows
+        shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
-          # Merge into index without committing yet (so we can restore workflows before commit)
+          # נסה למזג בלי קומיט כדי שנוכל להחזיר workflows לפני שמסיימים
           if git merge upstream/master --no-commit -X theirs; then
             echo "Merge staged (no-commit)."
           else
-            echo "Merge reported conflicts. We'll restore workflows and fail only if other conflicts remain."
+            echo "Merge had conflicts. We'll restore workflows and fail only if other conflicts remain."
           fi
 
-          # Restore workflows exactly as they were before merge
+          # להחזיר workflows המקומיים בדיוק כמו שהיו
           if [ -d "/tmp/workflows" ] && [ "$(ls -A /tmp/workflows 2>/dev/null)" ]; then
             rm -rf .github/workflows
             mkdir -p .github/workflows
             rsync -a /tmp/workflows/ .github/workflows/
           fi
 
-          # If merge didn't start and nothing changed, we're done
-          if ! git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
-            if git diff --quiet; then
-              echo "Already up to date."
-              exit 0
-            fi
-          fi
-
-          # If there are still unresolved conflicts (outside workflows), stop
+          # אם עדיין יש קונפליקטים (מחוץ ל-workflows) – עוצרים
           if git ls-files -u | grep -q .; then
             echo "Conflicts remain after restoring workflows. Manual resolution needed."
             git status
@@ -73,18 +66,19 @@ jobs:
 
           git add -A
 
-          # Commit only if there is something to commit
-          if git diff --cached --quiet; then
-            echo "Nothing to commit."
-            # If a merge is in progress we must conclude it
-            if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
-              git commit -m "Merge upstream/master into master (keep local workflows)"
-            fi
+          # אם יש merge במצב פתוח (MERGE_HEAD) – נסיים אותו תמיד
+          if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+            git commit --allow-empty -m "Merge upstream/master into master (keep local workflows)"
           else
-            git commit -m "Merge upstream/master into master (keep local workflows)"
+            # אם אין merge פתוח, ניצור קומיט רק אם יש שינוי אמיתי
+            if ! git diff --cached --quiet; then
+              git commit -m "Sync upstream/master (keep local workflows)"
+            else
+              echo "Already up to date."
+              exit 0
+            fi
           fi
 
-      - name: Push branch + tags
+      - name: Push branch (NO TAGS)
         run: |
           git push origin master
-          git push origin --tags
