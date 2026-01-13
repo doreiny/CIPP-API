@@ -1,4 +1,4 @@
-name: Sync upstream CIPP-API (code only, keep workflows)
+name: Sync upstream CIPP-API (sync code folders only)
 
 on:
   schedule:
@@ -25,27 +25,44 @@ jobs:
           git remote add upstream https://github.com/KelvinTegelaar/CIPP-API.git || true
           git fetch upstream
 
-      - name: Sync from upstream/master (exclude .github/workflows)
+      - name: Update code from upstream (leave .github/workflows untouched)
         shell: bash
         run: |
           set -euo pipefail
 
-          # 1) עדכן את כל הקוד מה-upstream, אבל אל תיגע ב-.github/workflows
-          git restore --source=upstream/master --staged --worktree -- . ':(exclude).github/workflows'
+          # תיקיות/קבצים שאנחנו כן רוצים לסנכרן (קוד ה-Function App)
+          PATHS=(
+            "CIPPActivityFunction"
+            "CIPPHttpTrigger"
+            "CIPPTimer"
+            "CIPPOrchestrator"
+            "ExecMaintenanceScripts"
+            "Functions"
+            "Modules"
+            "Config"
+            "Tools"
+            "host.json"
+            "requirements.psd1"
+            "profile.ps1"
+            "function.json"
+          )
 
-          # 2) מחק קבצים שנמחקו ב-upstream (גם פה לא נוגעים ב-workflows)
-          comm -23 \
-            <(git ls-tree -r --name-only HEAD | sort) \
-            <(git ls-tree -r --name-only upstream/master | sort) \
-            | grep -v '^\.github/workflows/' \
-            | xargs -r git rm -f
+          # למשוך רק מה שקיים ב-upstream (כדי לא להיתקע על pathspec)
+          for p in "${PATHS[@]}"; do
+            if git ls-tree -r --name-only upstream/master -- "$p" | grep -q .; then
+              echo "Syncing: $p"
+              git checkout upstream/master -- "$p"
+            else
+              echo "Skip (not in upstream): $p"
+            fi
+          done
 
-          # 3) Commit רק אם יש שינוי
+          # Commit רק אם יש שינוי
           if git status --porcelain | grep -q .; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add -A
-            git commit -m "Sync upstream (exclude workflows)"
+            git commit -m "Sync upstream (code folders only)"
           else
             echo "No changes to sync."
           fi
