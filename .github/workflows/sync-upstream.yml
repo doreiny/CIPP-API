@@ -23,13 +23,32 @@ jobs:
           git remote add upstream https://github.com/KelvinTegelaar/CIPP-API.git || true
           git fetch upstream
 
-      - name: Merge upstream/master into master (safe)
+      - name: Merge upstream/master into master (prefer upstream for workflows)
         run: |
+          set -e
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           git checkout master
-          git merge --no-edit upstream/master
+
+          # נסה merge רגיל
+          if git merge --no-edit upstream/master; then
+            echo "Merge succeeded."
+          else
+            echo "Merge conflict detected. Resolving workflow conflicts by taking upstream versions..."
+            # קח את הגרסאות של upstream לתיקיית workflows בלבד
+            git checkout --theirs .github/workflows || true
+            git add .github/workflows || true
+
+            # אם נשארו קונפליקטים במקום אחר - ניכשל (כדי שלא נעשה שטויות)
+            if git diff --name-only --diff-filter=U | grep -q .; then
+              echo "Conflicts remain outside .github/workflows. Failing."
+              git diff --name-only --diff-filter=U
+              exit 1
+            fi
+
+            git commit -m "Auto-merge upstream (resolved workflow conflicts)" || true
+          fi
 
       - name: Push to fork
         run: |
