@@ -1,72 +1,90 @@
-name: Sync upstream CIPP-API (sync code folders only)
+name: Sync upstream CIPP-API (keep local workflows)
 
 on:
   schedule:
-    - cron: "0 3 * * *"   # פעם ביום ב-03:00 UTC
+    - cron: "0 3 * * *"   # פעם ביום (UTC). אפשר לשנות/להוריד אם לא בא לך.
   workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: true
+
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout fork (master)
+      - name: Checkout fork
         uses: actions/checkout@v4
         with:
-          ref: master
           fetch-depth: 0
 
-      - name: Add upstream and fetch
-        shell: bash
+      - name: Configure git identity
         run: |
-          set -euo pipefail
-          git remote add upstream https://github.com/KelvinTegelaar/CIPP-API.git || true
-          git fetch upstream
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Update code from upstream (leave .github/workflows untouched)
-        shell: bash
+      - name: Backup local workflows (we must not touch them)
         run: |
-          set -euo pipefail
-
-          # תיקיות/קבצים שאנחנו כן רוצים לסנכרן (קוד ה-Function App)
-          PATHS=(
-            "CIPPActivityFunction"
-            "CIPPHttpTrigger"
-            "CIPPTimer"
-            "CIPPOrchestrator"
-            "ExecMaintenanceScripts"
-            "Functions"
-            "Modules"
-            "Config"
-            "Tools"
-            "host.json"
-            "requirements.psd1"
-            "profile.ps1"
-            "function.json"
-          )
-
-          # למשוך רק מה שקיים ב-upstream (כדי לא להיתקע על pathspec)
-          for p in "${PATHS[@]}"; do
-            if git ls-tree -r --name-only upstream/master -- "$p" | grep -q .; then
-              echo "Syncing: $p"
-              git checkout upstream/master -- "$p"
-            else
-              echo "Skip (not in upstream): $p"
-            fi
-          done
-
-          # Commit רק אם יש שינוי
-          if git status --porcelain | grep -q .; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add -A
-            git commit -m "Sync upstream (code folders only)"
-          else
-            echo "No changes to sync."
+          mkdir -p /tmp/workflows
+          if [ -d ".github/workflows" ]; then
+            rsync -a ".github/workflows/" /tmp/workflows/
           fi
 
-      - name: Push to fork
+      - name: Add upstream & fetch
+        run: |
+          git remote add upstream https://github.com/KelvinTegelaar/CIPP-API.git 2>/dev/null || true
+          git fetch upstream master --prune --tags
+
+      - name: Merge upstream/master (prefer upstream), then restore local workflows
+        run: |
+          set -e
+
+          # Merge into index without committing yet (so we can restore workflows before commit)
+          if git merge upstream/master --no-commit -X theirs; then
+            echo "Merge staged (no-commit)."
+          else
+            echo "Merge reported conflicts. We'll restore workflows and fail only if other conflicts remain."
+          fi
+
+          # Restore workflows exactly as they were before merge
+          if [ -d "/tmp/workflows" ] && [ "$(ls -A /tmp/workflows 2>/dev/null)" ]; then
+            rm -rf .github/workflows
+            mkdir -p .github/workflows
+            rsync -a /tmp/workflows/ .github/workflows/
+          fi
+
+          # If merge didn't start and nothing changed, we're done
+          if ! git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+            if git diff --quiet; then
+              echo "Already up to date."
+              exit 0
+            fi
+          fi
+
+          # If there are still unresolved conflicts (outside workflows), stop
+          if git ls-files -u | grep -q .; then
+            echo "Conflicts remain after restoring workflows. Manual resolution needed."
+            git status
+            exit 1
+          fi
+
+          git add -A
+
+          # Commit only if there is something to commit
+          if git diff --cached --quiet; then
+            echo "Nothing to commit."
+            # If a merge is in progress we must conclude it
+            if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+              git commit -m "Merge upstream/master into master (keep local workflows)"
+            fi
+          else
+            git commit -m "Merge upstream/master into master (keep local workflows)"
+          fi
+
+      - name: Push branch + tags
         run: |
           git push origin master
+          git push origin --tags
