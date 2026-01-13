@@ -12,9 +12,10 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout fork
+      - name: Checkout fork (master)
         uses: actions/checkout@v4
         with:
+          ref: master
           fetch-depth: 0
 
       - name: Add upstream and fetch
@@ -22,13 +23,13 @@ jobs:
           git remote add upstream https://github.com/KelvinTegelaar/CIPP-API.git || true
           git fetch upstream
 
-      - name: Fast-forward merge upstream/master -> master
+      - name: Merge upstream/master into master (safe)
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           git checkout master
-          git merge --ff-only upstream/master
+          git merge --no-edit upstream/master
 
       - name: Push to fork
         run: |
