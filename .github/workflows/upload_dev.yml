@@ -16,6 +16,13 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v3
 
+      # Create version.json with version and commit hash
+      - name: Create version.json
+        run: |
+          VERSION=$(cat version_latest.txt | tr -d '[:space:]')
+          SHORT_SHA="${GITHUB_SHA::7}"
+          echo "{\"version\": \"${VERSION}\", \"commit\": \"${SHORT_SHA}\"}" > version.json
+
       # Create ZIP File in a New Source Directory
       - name: Prepare and Zip Release Files
         run: |
